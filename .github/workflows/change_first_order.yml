@@ -1,0 +1,105 @@
+name: change_first_order
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: True
+
+jobs:
+    test:
+        name: "Python ${{ matrix.python-version }} on ${{ matrix.os }}"
+        runs-on: ${{ matrix.os }}
+
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - os: ubuntu-latest
+                      python-version: "3.12"
+                      channel-priority: "strict"
+                      envfile: ".github/environment-ci.yml"
+
+        steps:
+        - uses: actions/checkout@v4
+          with:
+            submodules: true
+
+        - name: Install OS dependencies
+          shell: bash -l {0}
+          run: |
+            case "${{ runner.os }}" in
+            Linux)
+              sudo apt-get update -yy
+              sudo apt-get install -yy  libsamplerate0
+              ;; 
+            macOS)
+              brew install libsamplerate
+              ;;
+            esac
+
+        - name: Cache conda
+          uses: actions/cache@v4
+          env:
+            # Increase this value to reset cache if etc/example-environment.yml has not changed
+            CACHE_NUMBER: 0
+          with:
+            path: ~/conda_pkgs_dir
+            key: ${{ runner.os }}-${{ matrix.python-version }}-conda-${{ env.CACHE_NUMBER }}-${{ hashFiles( matrix.envfile ) }}
+
+        - name: Install Conda environment
+          uses: conda-incubator/setup-miniconda@v3
+          with:
+            auto-update-conda: true
+            python-version: ${{ matrix.python-version }}
+            add-pip-as-python-dependency: true
+            auto-activate-base: false
+            activate-environment: test
+            channel-priority: ${{ matrix.channel-priority }}
+            environment-file: ${{ matrix.envfile }}
+            use-only-tar-bz2: false # IMPORTANT: This needs to be set for caching to work properly!
+
+        - name: Conda info
+          shell: bash -l {0}
+          run: |
+            conda info -a
+            conda list
+            python -c "import scipy; scipy.show_config()"
+
+        - name: Install librosa
+          shell: bash -l {0}
+          run: python -m pip install --upgrade-strategy only-if-needed -e .[tests]
+
+        - name: Install pytest-ranking related
+          shell: bash -l {0}
+          run: python -m pip install pytest-ranking pytest-json-report
+
+        - name: Restore pytest-ranking cache
+          id: restore-pytest-ranking-cache
+          if: always()
+          uses: actions/cache/restore@v4
+          with:
+            path: ${{ github.workspace }}/.pytest_cache/v/pytest_ranking_data
+            key: pytest-ranking-cache-${{ github.workflow }}-${{ runner.os }}-${{ matrix.python }}
+        
+        - name: Run pytest
+          shell: bash -l {0}
+          run: pytest -v --durations=0 --json-report --json-report-file=./test-report.json --rank --rank-weight=0-0-1 -k "not test_stream"
+
+        - name: Save pytest-ranking cache
+          id: save-pytest-ranking-cache
+          if: always()
+          uses: actions/cache/save@v4
+          with:
+            path: ${{ github.workspace }}/.pytest_cache/v/pytest_ranking_data
+            key: pytest-ranking-cache-${{ github.workflow }}-${{ runner.os }}-${{ matrix.python }}-${{ github.run_id }}
+        - uses: actions/upload-artifact@v4
+          if: always()
+          with:
+              name: pytest-ranking upload test report json
+              path: |
+                ./test-report.json
+            
