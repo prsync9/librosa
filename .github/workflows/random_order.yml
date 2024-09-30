@@ -1,12 +1,9 @@
-name: CI
+name: random_order
 
 on:
   push:
-    branches:
-    - main
   pull_request:
-    branches:
-    - main
+  workflow_dispatch:
 
 concurrency:
     group: ${{ github.workflow }}-${{ github.ref }}
@@ -22,42 +19,6 @@ jobs:
             matrix:
                 include:
                     - os: ubuntu-latest
-                      python-version: "3.7"
-                      envfile: ".github/environment-minimal.yml"
-                      channel-priority: "flexible"
-                      name: "Minimal dependencies"
-
-                    - os: ubuntu-latest
-                      python-version: "3.8"
-                      channel-priority: "strict"
-                      envfile: ".github/environment-ci.yml"
-
-                    - os: ubuntu-latest
-                      python-version: "3.9"
-                      channel-priority: "strict"
-                      envfile: ".github/environment-ci.yml"
-
-                    - os: ubuntu-latest
-                      python-version: "3.10"
-                      channel-priority: "strict"
-                      envfile: ".github/environment-ci.yml"
-
-                    - os: ubuntu-latest
-                      python-version: "3.11"
-                      channel-priority: "strict"
-                      envfile: ".github/environment-ci.yml"
-
-                    - os: ubuntu-latest
-                      python-version: "3.12"
-                      channel-priority: "strict"
-                      envfile: ".github/environment-ci.yml"
-
-                    - os: macos-latest
-                      python-version: "3.12"
-                      channel-priority: "flexible"
-                      envfile: ".github/environment-ci.yml"
-
-                    - os: windows-latest
                       python-version: "3.12"
                       channel-priority: "strict"
                       envfile: ".github/environment-ci.yml"
@@ -112,17 +73,32 @@ jobs:
           shell: bash -l {0}
           run: python -m pip install --upgrade-strategy only-if-needed -e .[tests]
 
+        - name: Install pytest-ranking related
+          shell: bash -l {0}
+          run: python -m pip install pytest-ranking pytest-json-report
+
+        - name: Restore pytest-ranking cache
+          id: restore-pytest-ranking-cache
+          if: always()
+          uses: actions/cache/restore@v4
+          with:
+            path: ${{ github.workspace }}/.pytest_cache/v/pytest_ranking_data
+            key: pytest-ranking-cache-${{ github.workflow }}-${{ runner.os }}-${{ matrix.python }}
+        
         - name: Run pytest
           shell: bash -l {0}
-          run: pytest
+          run: pytest -v --durations=0 --json-report --json-report-file=./test-report.json --rank --rank-weight=0-0-0 -k "not test_stream"
 
-        - name: Upload coverage to Codecov
-          uses: codecov/codecov-action@v4
+        - name: Save pytest-ranking cache
+          id: save-pytest-ranking-cache
+          if: always()
+          uses: actions/cache/save@v4
           with:
-            token: ${{ secrets.CODECOV_TOKEN }}
-            files: ./coverage.xml
-            flags: unittests
-            env_vars: OS,PYTHON
-            name: codecov-umbrella
-            fail_ci_if_error: true
-            verbose: true
+            path: ${{ github.workspace }}/.pytest_cache/v/pytest_ranking_data
+            key: pytest-ranking-cache-${{ github.workflow }}-${{ runner.os }}-${{ matrix.python }}-${{ github.run_id }}
+        - uses: actions/upload-artifact@v4
+          if: always()
+          with:
+              name: pytest-ranking upload test report json
+              path: |
+                ./test-report.json
